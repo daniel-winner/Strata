@@ -81,5 +81,15 @@
  "fx80": "Necesita unos {0} GB de espacio libre en disco. Lo que no cabe en memoria se lee de tu SSD.",
  "fx81": "{0} de RAM + VRAM, más unos {1} GB de disco",
  "fx82": "Respuestas más rápidas en tarjetas NVIDIA de 12 GB",
- "fx83": "Prefiere las partes del modelo que ya están en la tarjeta gráfica, lo que hace las respuestas más rápidas en tarjetas de 12 GB. Desactivado por defecto: en sesiones largas de agente puede repetirse y dar resultados más débiles. Actívalo si sobre todo chateas y quieres la velocidad."
+ "fx83": "Prefiere las partes del modelo que ya están en la tarjeta gráfica, lo que hace las respuestas más rápidas en tarjetas de 12 GB. Desactivado por defecto: en sesiones largas de agente puede repetirse y dar resultados más débiles. Actívalo si sobre todo chateas y quieres la velocidad.",
+ "fx84": "Hoy",
+ "fx85": "Solicitudes hoy",
+ "fx86": "Tokens hoy",
+ "fx87": "{0} de entrada · {1} de salida",
+ "fx88": "Velocidad media de salida hoy",
+ "fx89": "sobre {0} respuestas",
+ "fx90": "Concurrencia ahora",
+ "fx91": "en ejecución · en cola",
+ "fx92": "Concurrencia máxima hoy",
+ "fx93": "máximo a la vez"
 }

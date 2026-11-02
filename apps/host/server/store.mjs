@@ -45,6 +45,8 @@ const DEFAULTS = {
   },
   expert: {}, // id -> value
   serving: { otherDevices: false, apiKey: null, pauseServing: false },
+  /** The Monitor's counters for the current day, kept so a host restart does not lose them. */
+  usage: null,
 };
 
 function read() {

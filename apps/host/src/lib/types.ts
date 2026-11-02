@@ -317,6 +317,18 @@ export interface MonitorState {
     cachedTokens: number;
     uncachedTokens: number;
   };
+  /** Today's counters, kept by the host across restarts (the Monitor's Today card). */
+  daily?: {
+    date: string;
+    tokensIn: number;
+    tokensOut: number;
+    requests: number;
+    usageRequests: number;
+    avgTps: number;
+    cachedTokens: number;
+    peakRunning: number;
+    peakWaiting: number;
+  };
 }
 
 export interface ChatMessage {

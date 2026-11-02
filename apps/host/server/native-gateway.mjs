@@ -1,6 +1,6 @@
 /** Preserve native protocol events and tool payloads; the gateway owns identity and cancellation. */
 import { once } from 'node:events';
-export async function nativeGateway({req,res,path,body,control,serving,fetcher=fetch}){
+export async function nativeGateway({req,res,path,body,control,serving,record=()=>{},fetcher=fetch}){
  let instance;try{instance=control.resolveInstance(body.model);}catch(e){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:e.message,type:'invalid_request_error',param:'model',code:null}}));return;}
  const abort=new AbortController(),started=Date.now();let sawDone=false;/* #4690: a client that hangs up after `data: [DONE]` (the OpenAI SDK does) has the whole answer: that is not a cancel. */res.on('close',()=>{if(!res.writableEnded&&!sawDone)abort.abort();});
  const entry=serving.open({client:req.headers['user-agent']?.slice(0,100)??'API client',endpoint:path.slice(3),model:instance.apiModelId,instanceId:instance.id,gpuIds:instance.gpus.map(String),cancel:()=>abort.abort()});
@@ -13,6 +13,6 @@ export async function nativeGateway({req,res,path,body,control,serving,fetcher=f
   res.writeHead(response.status,{'content-type':response.headers.get('content-type')??'application/json','cache-control':'no-cache','x-strata-request-id':entry.id,'x-accel-buffering':'no'});
   if(body.stream===true){let buffer='';const decoder=new TextDecoder();for await(const chunk of response.body){buffer+=decoder.decode(chunk,{stream:true});let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);if(line.startsWith('data:')){if(line.slice(5).trim()==='[DONE]')sawDone=true;else try{observe(JSON.parse(line.slice(5)));}catch{}}}if(!res.destroyed&&!res.write(chunk))await once(res,'drain',{signal:abort.signal});}}
   else{const text=await response.text();try{observe(JSON.parse(text));}catch{}res.write(text);}
-  serving.mark(entry.id,{tokensIn,tokensOut,tps,promptTps,usageSource:tokensIn===null||tokensOut===null?'unavailable':'reported'});serving.finish(entry.id,{tokensOut,durationMs:Date.now()-started});res.end();
+  serving.mark(entry.id,{tokensIn,tokensOut,tps,promptTps,usageSource:tokensIn===null||tokensOut===null?'unavailable':'reported'});serving.finish(entry.id,{tokensOut,durationMs:Date.now()-started});record({tokensIn,tokensOut,durationMs:Date.now()-started,tps});res.end();
  }catch(e){serving.finish(entry.id,{tokensOut,durationMs:Date.now()-started,error:abort.signal.aborted?'Request cancelled.':e.message});if(!res.headersSent){res.writeHead(502,{'content-type':'application/json'});res.end(JSON.stringify({error:{message:e.message,type:'server_error'}}));}else res.end();}
 }

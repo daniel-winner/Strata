@@ -175,6 +175,9 @@ function LegacyMonitorScreen({ native }: {
     const lastCacheText = hasReading(cache?.lastReused) && hasReading(cache?.lastPrompt) ? `${tokens(cache.lastReused)} of ${tokens(cache.lastPrompt)} prompt tokens reused` : lastReused ? `${tokens(lastReused.cachedTokens)} of ${tokens(lastReused.tokensIn)} prompt tokens reused` : 'Reuse not reported';
     const promptSpeed = data.totals.promptMs ? data.totals.uncachedTokens / (data.totals.promptMs / 1000) : null;
     const outputSpeed = data.totals.decodeMs ? data.totals.tokensOut / (data.totals.decodeMs / 1000) : null;
+    // The host keeps today's counters (requests, tokens, average speed, peak concurrency) in its state file.
+    const daily = data.daily ?? storedLive?.daily ?? null;
+    const dailyTokens = daily ? (hasReading(daily.tokensIn) ? daily.tokensIn : 0) + (hasReading(daily.tokensOut) ? daily.tokensOut : 0) : 0;
     const multipleScope = selection === 'all' && (runtime?.instances.length ?? 0) > 1;
     const chooseInstance = (id: string) => { setInstanceSelection(id); setGpuSelection(null); };
     const overview = <div className="stack stack--lg monitor-capture monitor-dashboard" ref={snapshotRef}>
@@ -197,6 +200,13 @@ function LegacyMonitorScreen({ native }: {
       <MonitorMetric label={tr("Disk read")} icon="disk" value={number(hasReading(data.hardware.diskReadGbs) ? data.hardware.diskReadGbs >= 1 ? data.hardware.diskReadGbs : data.hardware.diskReadGbs * 1024 : null, 1)} unit={hasReading(data.hardware.diskReadGbs) ? data.hardware.diskReadGbs >= 1 ? 'GB/s' : 'MB/s' : ''} source={hasReading(data.hardware.diskReadGbs) ? 'Measured' : 'Unavailable'} sub={hasReading(data.hardware.diskWriteMbs) ? `Write ${number(data.hardware.diskWriteMbs, 1)} MB/s` : 'Read throughput'} chart={chart('Disk read', history.map(s => hasReading(s.diskReadGbs) ? s.diskReadGbs * 1024 : null), 'MB/s', undefined, 'var(--st-info)')}/>
     </div>
     {tr(readingsStrip.length ? <section className="st-card monitor-readings" aria-label={tr("Energy and temperature readings")}><dl>{readingsStrip.map(item => <div key={item.label}><dt>{tr(item.label)}</dt><dd className="num">{item.value}</dd></div>)}</dl></section> : null)}
+    {tr(daily ? <section className="st-card monitor-readings monitor-daily" aria-label={tr("Today")}><h2 className="h4">{tr("Today")}</h2><dl>
+      <div><dt>{tr("Requests today")}</dt><dd className="num">{number(daily.requests)}</dd></div>
+      <div><dt>{tr("Tokens today")}</dt><dd className="num">{tokens(dailyTokens)}<small>{tr("{0} in · {1} out", [number(daily.tokensIn), number(daily.tokensOut)])}</small></dd></div>
+      <div><dt>{tr("Average output today")}</dt><dd className="num">{hasReading(daily.avgTps) && daily.usageRequests > 0 ? `${number(daily.avgTps, 1)} t/s` : '—'}<small>{tr("over {0} answers", [number(daily.usageRequests)])}</small></dd></div>
+      <div><dt>{tr("Concurrent now")}</dt><dd className="num">{`${number(data.queue.running)} · ${number(data.queue.waiting)}`}<small>{tr("running · queued")}</small></dd></div>
+      <div><dt>{tr("Peak concurrent today")}</dt><dd className="num">{number(daily.peakRunning)}<small>{tr("most at one time")}</small></dd></div>
+    </dl></section> : null)}
     <div className="monitor-context-requests">
       <section className="st-card monitor-context"><h2 className="h4">{tr("Context fill")}</h2><div className="monitor-context__gauge"><Gauge value={contextPct ?? 0} label={tr(hasReading(contextPct) ? `${Math.round(contextPct)}%` : '—')} sub={contextKnown ? `${tokens(contextUsed)} / ${contextLabel(data.context.maxTokens)}` : selection === 'all' && (runtime?.instances.length ?? 0) > 1 ? 'Select a model to see context' : 'No recorded request usage'}/></div>
         <div className="monitor-bar-reading"><span>{tr("Experts in VRAM")}</span><span className="muted num">{tr(cacheKnown ? `${number(data.expertCache.used)}${hasReading(cacheMemory) ? ` · ${number(cacheMemory, 1)} GB` : ''}` : '—')}</span></div><ReadingBar label={tr("Experts in VRAM")} value={cachePercent}/>

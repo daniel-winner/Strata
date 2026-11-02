@@ -2,12 +2,17 @@
 import { fileURLToPath } from 'node:url';
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { build } from 'esbuild';
 import { sumEngineRequests, turnEngineSpeed } from '../server/agent/engine-speed.mjs';
 import { TurnProjector } from '../server/agent/events.mjs';
 import { answerSpeed } from '../server/model-providers.mjs';
-import * as monitor from '../server/monitor.mjs';
-import * as serving from '../server/serving.mjs';
+/* The host stores its state (and today's Monitor counters) under STRATA_HOME: keep the test in its own folder. */
+process.env.STRATA_HOME = mkdtempSync(join(tmpdir(), 'strata-answer-speed-'));
+const monitor = await import('../server/monitor.mjs');
+const serving = await import('../server/serving.mjs');
 
 async function moduleAt(path) { const result = await build({ entryPoints: [fileURLToPath(new URL(path, import.meta.url))], bundle: true, write: false, platform: 'node', format: 'esm' }); return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`); }
 const { chatMetrics } = await moduleAt('../src/lib/chat-metrics.ts');

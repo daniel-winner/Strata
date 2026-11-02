@@ -8,11 +8,16 @@ import { readTemperatures, stopTemperatures } from './temperature-telemetry.mjs'
 import { addEnergy, energyWh } from './energy-meter.mjs';
 import { state as servingState } from './serving.mjs';
 import { originalDashboard } from './monitor-dashboard.mjs';
-import { get as getStore } from './store.mjs';
+import { get as getStore, update as updateStore } from './store.mjs';
 import * as supervisor from './supervisor.mjs';
 import { clamp, round } from './util.mjs';
 
 const HISTORY = 60;
+
+/* The Monitor's Today card: the day is the computer's own calendar day, and the counters live in the
+   store file so a host restart does not empty them. */
+const dayKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const emptyDay = () => ({ date: dayKey(), tokensIn: 0, tokensOut: 0, requests: 0, usageRequests: 0, avgTps: 0, cachedTokens: 0, peakRunning: 0, peakWaiting: 0 });
 
 const state = {
   phase: 'idle',
@@ -34,6 +39,7 @@ const state = {
     tempLimitC: 100,
   },
   history: [],
+  daily: emptyDay(),
   totals: {
     tokensIn: 0,
     tokensOut: 0,
@@ -69,6 +75,24 @@ export function watch() {
   if (wasIdle) sensorsAt = 0;                                    // opening the Monitor after a quiet spell reads the card at once
 }
 export function setLiveProbe(probe) { liveProbe = typeof probe === 'function' ? probe : () => false; }
+/** Today's counters, rolled over at midnight and read back from the store after a host restart. */
+function rollDaily() {
+  const today = dayKey();
+  if (state.daily.date !== today) {
+    const saved = getStore().usage;
+    state.daily = saved && saved.date === today ? { ...emptyDay(), ...saved } : emptyDay();
+  }
+  return state.daily;
+}
+function persistDaily() { updateStore({ usage: state.daily }); }
+/** The highest concurrency seen today: how many requests ran (or waited) at the same time at most. */
+export function noteConcurrency(running, waiting) {
+  const daily = rollDaily();
+  let changed = false;
+  if (Number.isFinite(running) && running > daily.peakRunning) { daily.peakRunning = Math.round(running); changed = true; }
+  if (Number.isFinite(waiting) && waiting > daily.peakWaiting) { daily.peakWaiting = Math.round(waiting); changed = true; }
+  if (changed) persistDaily();
+}
 let systemReading=null;
 /* CPU and SSD temperatures (null where this PC cannot give one) and the GPU energy used since the host started (#3628). */
 let temperatures={cpuTempC:null,ssdTempC:null};
@@ -112,6 +136,7 @@ export function init(hub, hardware) {
   state.expertCache = { used: 0, total: 64 };
   state.history = [];
   state.totals.since = new Date().toISOString();
+  state.daily = rollDaily();
 
   if (ticker) clearInterval(ticker);
   ticker = setInterval(tick, 1000);
@@ -202,6 +227,7 @@ function tick() {
   ];
 
   if (!engine.running) state.queue.running = busy ? 1 : 0;
+  noteConcurrency(state.queue.running, state.queue.waiting);
   state.context.pct = clamp((state.context.usedTokens / Math.max(state.context.maxTokens, 1)) * 100, 0, 100);
   hubRef?.send('monitor', snapshot());
 }
@@ -231,6 +257,7 @@ export function snapshot() {
     conversationCache: { source: 'unavailable' },
     history: state.history,
     totals: { ...state.totals },
+    daily: { ...state.daily },
     telemetry: { ...state.telemetry, system:systemReading?'sensor':'none' },
     engine: {
       status: engine.status,
@@ -391,6 +418,18 @@ export function record({ tokensIn, tokensOut, durationMs = 0, ttftMs = null, cac
     state.totals.cachedTokens += cached;
     state.totals.uncachedTokens += Math.max(0, tokensIn - cached);
   }
+
+  // The same request, counted into today's card.
+  const daily = rollDaily();
+  daily.requests += 1;
+  if (Number.isFinite(tokensIn)) daily.tokensIn += tokensIn;
+  if (Number.isFinite(tokensOut)) daily.tokensOut += tokensOut;
+  if (Number.isFinite(answerTps) && answerTps > 0) {
+    const n = ++daily.usageRequests;
+    daily.avgTps = round((daily.avgTps * (n - 1) + answerTps) / n, 1);
+  }
+  if (Number.isFinite(cachedTokens) && Number.isFinite(tokensIn)) daily.cachedTokens += Math.min(cachedTokens, tokensIn);
+  persistDaily();
 }
 
 export function queueWaiting(n) {
