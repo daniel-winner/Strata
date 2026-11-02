@@ -367,6 +367,7 @@ function render(m) {
   modelButton(live);
   if (!modelOp && !localLoad && live.queued > 0) setPill("queued", tr("pill.queued", "{n} queued", {n: live.queued}));
   if (tab === "monitor") renderMonitor(live, hw, st, eng, h, last, m.requests || [], m.totals, m.requests_kept);
+  if (tab === "monitor") renderToday(m.daily, live);
   if (tab === "monitor") renderConvCache(m.conversation_cache);
   if (tab === "about") renderAbout(eng, hw, st);
 }
@@ -404,6 +405,20 @@ function renderConvCache(c) {
     : "The engine keeps the last conversation's state, so a follow-up reads only what is new. To keep several conversations (agents taking turns), add \"--conversation-cache-mib\", \"8192\" to the run config's args (docs/DETAILS.md).";
 }
 
+function renderToday(d, live) {
+  // The Today card: what this calendar day has done, counted by the server (serve/usage_daily.py).
+  const el = $("today-facts"); if (!el) return;
+  if (!d) { el.innerHTML = ""; return; }
+  const running = live.running != null ? live.running
+      : (live.state === "reading" || live.state === "generating" ? 1 : live.state === "idle" || live.state === "unloaded" ? 0 : null);
+  facts(el, [
+    ["Requests today", fmt(d.requests)],
+    ["Tokens today", `${fmt((d.prompt_tokens || 0) + (d.output_tokens || 0))} (${fmt(d.prompt_tokens)} in · ${fmt(d.output_tokens)} out)`],
+    ["Average output today", d.usage_requests ? `${fmt(d.avg_decode_tok_s, 1)} t/s over ${fmt(d.usage_requests)} answers` : null],
+    ["Concurrent now", `${fmt(running)} running · ${fmt(live.queued || 0)} queued`],
+    ["Peak concurrent today", `${fmt(d.peak_running)} running · ${fmt(d.peak_queued)} queued`],
+  ]);
+}
 function renderTotals(t) {
   if (!t || !t.requests) return "";
   const since = new Date(t.since * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"});

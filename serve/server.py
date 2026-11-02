@@ -85,6 +85,7 @@ from serve import lifeline  # noqa: E402
 from serve.structured import StructuredOutputError, prepare_format, validated_json, extract_json  # noqa: E402
 from serve import responses as responses_api  # noqa: E402
 from serve.responses import ResponsesError, error_body as responses_error_body  # noqa: E402
+from serve.usage_daily import DailyUsage, default_usage_path  # noqa: E402
 from serve import images as images_api  # noqa: E402
 
 IM_END = "<|im_end|>"
@@ -4237,6 +4238,7 @@ class Service:
         self.totals = {"since": time.time(), "requests": 0, "prompt_tokens": 0, "reused": 0, "output_tokens": 0,
                        "prompt_ms": 0.0, "decode_ms": 0.0,
                        "drafts_offered": 0, "drafts_accepted": 0}   # #457: the MTP drafts, summed where reported
+        self.daily_usage = DailyUsage(default_usage_path())          # the Monitor's Today card, kept over a restart
         self.last_timings = None                         # the last finished request's, llama.cpp's names (/v1/status)
         # /metrics/prometheus' two throughput gauges need the totals as they stood at the last scrape, because
         # llama.cpp averages them over the window between two scrapes (#2341).
@@ -4433,6 +4435,7 @@ class Service:
         self.last_request_at = time.time()                  # the idle unload counts this as activity
         with self.status_lock:
             self.status["queued"] += 1
+            self.daily_usage.note(len(self.live_reqs), self.status["queued"])
         waiting = True
         try:
             with self.fifo:
@@ -4757,6 +4760,7 @@ class Service:
         waiting = time.perf_counter()
         with self.status_lock:                          # #1603: waiting for the fifo to start the engine is queued, not nothing
             self.status["queued"] += 1
+            self.daily_usage.note(len(self.live_reqs), self.status["queued"])
         counted = True
         try:
             with self.fifo:
@@ -4961,6 +4965,9 @@ class Service:
                 s = {**s, **dict(list(self.live_reqs.values())[-1][0]), "queued": s.get("queued", 0)}
             hist = list(self.history)
             totals = dict(self.totals)
+            daily = self.daily_usage.snapshot()
+        self.daily_usage.flush()
+        self.daily_usage.flush()
         now = time.time()
         progress = getattr(self.engine, "progress", None)
         if s.get("busy") and s.get("first_token") is None:
@@ -5006,7 +5013,7 @@ class Service:
         parked = self.conv_log.poll(getattr(self.engine, "log_path", None), getattr(self.engine, "log_start", None))
         return {"engine": engine, "live": live, "requests": hist[::-1][:None if all_requests else 12],
                 "conversation_cache": conversation_cache_view(engine, hist, totals, parked),
-                "requests_kept": len(hist), "totals": totals, "hardware": tel["now"],
+                "requests_kept": len(hist), "totals": totals, "daily": daily, "hardware": tel["now"],
                 "hardware_static":
                 tel["static"], "history": tel["history"], "time": now}
 
@@ -5015,6 +5022,7 @@ class Service:
         metric names (llamacpp:*) so its dashboards work unchanged; the drafts and requests as strata:*."""
         with self.status_lock:
             s, t = dict(self.status), dict(self.totals)
+            daily = self.daily_usage.snapshot()
             running = len(self.live_reqs) or int(bool(s.get("busy")))
             prompt_n = t["prompt_tokens"] - t["reused"]               # what was read, as llama.cpp counts it
             prompt_s, decode_s = t["prompt_ms"] / 1000, t["decode_ms"] / 1000
@@ -5039,6 +5047,9 @@ class Service:
             ("llamacpp:requests_processing", "gauge", "Requests running", running),
             ("llamacpp:requests_deferred", "gauge", "Requests waiting their turn", s.get("queued") or 0),
             ("strata:requests_total", "counter", "Requests finished", t["requests"]),
+            ("strata:requests_today_total", "counter", "Requests finished today", daily["requests"]),
+            ("strata:prompt_tokens_today_total", "counter", "Prompt tokens today", daily["prompt_tokens"]),
+            ("strata:tokens_predicted_today_total", "counter", "Tokens generated today", daily["output_tokens"]),
             ("strata:drafts_offered_total", "counter", "Speculative draft tokens offered", t["drafts_offered"]),
             ("strata:drafts_accepted_total", "counter", "Speculative draft tokens accepted", t["drafts_accepted"]),
             ("strata:tool_calls_unread_total", "counter", "<tool_call> blocks returned as text (an undeclared name or a form the template does not use)",
@@ -5581,6 +5592,7 @@ class Service:
         setattr(cancel, "_strata_replica_selected", replica_selected)
         with self.status_lock:
             self.status["queued"] += 1
+            self.daily_usage.note(len(self.live_reqs), self.status["queued"])
             self.terminal_requests[request_id] = {"id": request_id, "state": "queued",
                                                     "queued_at": time.time(), "admitted_at": None,
                                                     "prompt_tokens": len(ids)}
@@ -5643,7 +5655,10 @@ class Service:
                                   max_tokens=max_new, reasoning_recoveries=0, thinking_budget=budget)
                         if par:
                             self.live_reqs[id(st)] = (st, rate)
-                            self.status.update(st)
+                            self.daily_usage.note(len(self.live_reqs), self.status.get("queued", 0))
+                        self.status.update(st)
+                        if not par and st.get("busy"):
+                            self.daily_usage.note(1, self.status.get("queued", 0))
                         self.last_request_at = time.time()
                         rate.clear()                    # the previous request's samples must not leak into this one
                     before = getattr(self.engine, "last", None)
@@ -5897,6 +5912,8 @@ class Service:
                             pcie_share = round(last["offloaded"] / routed, 3) \
                                 if last.get("offloaded") is not None and routed else None
                             seen = prompt_tokens_seen(len(ids), last)   # #471: < len(ids) when cancelled mid-read
+                            decode_tps = round(last["generated"] / (last["decode_ms"] / 1000), 1) \
+                                if n and (last.get("generated") or 0) >= 2 and last.get("decode_ms") else None
                             self.history.append({
                                 "id": request_id,
                                 "projection": (sampling or {}).get("experimental_speed_projection") is not False
@@ -5910,8 +5927,7 @@ class Service:
                                 "reasoning_repeat_coverage": round(repeat_coverage, 3),
                                 "engine_generated": last.get("generated"),
                                 "prompt_ms": last.get("prompt_ms"), "decode_ms": last.get("decode_ms"),
-                                "decode_tok_s": round(last["generated"] / (last["decode_ms"] / 1000), 1)
-                                if n and (last.get("generated") or 0) >= 2 and last.get("decode_ms") else None,
+                                "decode_tok_s": decode_tps,
                                 "hit_rate": hit_rate, "pcie_share": pcie_share, "ram_blobs": last.get("ram_blobs"),
                                 "file_blobs": last.get("file_blobs"), "file_mb": last.get("file_mb"),
                                 # #457: the speculative drafts from the DONE line (None: the engine did not say)
@@ -5926,6 +5942,8 @@ class Service:
                             t["decode_ms"] += last.get("decode_ms") or 0.0
                             t["drafts_offered"] += last.get("drafts_offered") or 0
                             t["drafts_accepted"] += last.get("drafts_accepted") or 0
+                            self.daily_usage.record(seen, n, last.get("reused") or 0,
+                                                    last.get("decode_ms") or 0.0, decode_tps)
                             ft0 = st.get("first_token")             # this request's own (#465: one per request)
                             self.latencies.observe(ft0 - started if ft0 else None, n,
                                                    (last.get("decode_ms") or 0.0) / 1000, time.time() - started)

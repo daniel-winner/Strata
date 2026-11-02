@@ -3,14 +3,18 @@
     python -m unittest serve.test_request_accounting -v
 """
 import json
+import os
+import tempfile
 import unittest
 import urllib.error
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 from serve.frontend import ChatTemplate
 from serve.server import ByteTokenizer, EngineDied, Service, add_carry, carry_leg, request_timings, serve
 from serve.test_server import ThinkingEngine
+from serve.usage_daily import DailyUsage
 
 
 class ClockedThinkingEngine(ThinkingEngine):
@@ -56,6 +60,9 @@ class RequestAccounting(unittest.TestCase):
         tok = ByteTokenizer()
         self.engine = ClockedThinkingEngine(tok)
         self.svc = Service(self.engine, tok, ChatTemplate(Path(__file__).with_name("chat_template.jinja")))
+        self._usage_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._usage_dir.cleanup)
+        self.svc.daily_usage = DailyUsage(os.path.join(self._usage_dir.name, "usage.json"))
         self.httpd = serve(self.svc, port=0)
         self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
 
@@ -115,6 +122,16 @@ class RequestAccounting(unittest.TestCase):
         self.assertEqual((totals["requests"], totals["prompt_tokens"], totals["reused"]), (1, original, 5))
         self.assertEqual((totals["prompt_ms"], totals["decode_ms"]), (47.0, 280.0))
         self.assertEqual((totals["drafts_offered"], totals["drafts_accepted"]), (29, 15))
+        daily = metrics["daily"]                     # the Today card's counters for this one request
+        self.assertEqual(daily["date"], date.today().isoformat())
+        self.assertEqual((daily["requests"], daily["prompt_tokens"], daily["reused"]), (1, original, 5))
+        self.assertEqual(daily["decode_ms"], 280.0)
+        self.assertEqual((daily["peak_running"], daily["peak_queued"]), (1, 1))
+        if row["decode_tok_s"]:
+            self.assertEqual(daily["usage_requests"], 1)
+            self.assertEqual(daily["avg_decode_tok_s"], row["decode_tok_s"])
+        else:
+            self.assertEqual(daily["usage_requests"], 0)
         code, raw = self.request("/v1/status")
         self.assertEqual(code, 200)
         self.assertEqual(json.loads(raw)["last_timings"]["draft_n"], 29)
