@@ -136,7 +136,8 @@ export function init(hub, hardware) {
   state.expertCache = { used: 0, total: 64 };
   state.history = [];
   state.totals.since = new Date().toISOString();
-  state.daily = rollDaily();
+  const savedDaily = getStore().usage;
+  state.daily = savedDaily && savedDaily.date === dayKey() ? { ...emptyDay(), ...savedDaily } : emptyDay();
 
   if (ticker) clearInterval(ticker);
   ticker = setInterval(tick, 1000);
